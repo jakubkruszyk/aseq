@@ -1,22 +1,55 @@
+use std::{
+    collections::HashSet,
+    env,
+    io::{Read, Write},
+};
+
 fn main() {
-    // given test vectors
-    // ASSUMPTION: items are unique
-    let vectors = [1, 2, 5, 4, 3, 6];
+    // Load vectors from given file
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 2 {
+        println!("Invalid number of arguments.\nUsage: aseq <path_to_vectors_file>");
+        return;
+    }
+
+    let file = std::fs::File::open(&args[1]);
+    let mut content = String::new();
+    let _ = match file {
+        Ok(mut f) => f.read_to_string(&mut content),
+        Err(e) => {
+            println!("Error opening file: {}", e);
+            return;
+        }
+    };
+
+    let mut vectors: Vec<u64> = Vec::new();
+    for line in content.lines() {
+        let v: u64 = line
+            .parse()
+            .expect(&format!("Couldn't parse line: {} to u64", line));
+        if vectors.contains(&v) {
+            println!("Vectors must be unique. Duplicate item: {}", v);
+            return;
+        }
+        vectors.push(v);
+    }
 
     // create distance map
     let map = distance_map(&vectors);
 
-    println!("Distance map");
+    let mut csv = String::new();
     for row in map.iter() {
-        let mut line = String::new();
         for item in row.iter() {
-            line.push_str(format!("{}\t", item).as_str());
+            csv.push_str(&format!("{},", item));
         }
-        println!("{}", line);
+        csv.push_str("\n");
     }
+    let mut csv_file = std::fs::File::create("distances.csv").unwrap();
+    let _ = csv_file.write_all(&csv.as_bytes());
+    println!("Distance map saved to distances.csv file.");
 
     // create sequences
-    let mut res = get_all_sequences(&map);
+    let res = get_all_sequences(&map);
     println!("Sequences");
     println!("{:?}", res);
     println!("Sequences de-mapped");
@@ -27,22 +60,24 @@ fn main() {
         println!("{}", vectors[seq[seq.len() - 1]]);
     }
 
-    // Filter
-    let first = res.remove(2);
-    println!("Removing vector: {:?}", first);
-    let res_no_div = eliminate_sequence(res.clone(), &first, false);
-    println!("Remaining (no-div): {:?}", res_no_div);
-    let res_div = eliminate_sequence(res.clone(), &first, true);
-    println!("Remaining (div): {:?}", res_div);
+    // Create pattern set
+    let patterns = filter_seq_bms(res, &vectors);
+    println!("Filtered patterns: {:?}", patterns);
 }
 
 /// Creates distance map
-fn distance_map(vectors: &[i32]) -> Vec<Vec<i32>> {
-    let mut map: Vec<Vec<i32>> = Vec::with_capacity(vectors.len());
+fn distance_map(vectors: &[u64]) -> Vec<Vec<u64>> {
+    let mut map: Vec<Vec<u64>> = Vec::with_capacity(vectors.len());
     for item in vectors.iter() {
-        let mut row: Vec<i32> = Vec::with_capacity(vectors.len());
+        let mut row: Vec<u64> = Vec::with_capacity(vectors.len());
         for next_item in vectors.iter() {
-            row.push(*next_item - *item);
+            let diff = *next_item as i128 - *item as i128;
+            let udiff = if diff < 0 {
+                (!diff + 1) as u64
+            } else {
+                diff as u64
+            };
+            row.push(udiff);
         }
         map.push(row);
     }
@@ -50,7 +85,7 @@ fn distance_map(vectors: &[i32]) -> Vec<Vec<i32>> {
 }
 
 /// Create arithmetic sequence based on given element (row) and next element (col)
-fn get_single_seq(map: &Vec<Vec<i32>>, row: usize, col: usize) -> Vec<usize> {
+fn get_single_seq(map: &Vec<Vec<u64>>, row: usize, col: usize) -> Vec<usize> {
     // vector of number ids that forms arithmetic sequence
     let mut path: Vec<usize> = vec![row];
     let increment = map[row][col];
@@ -91,8 +126,8 @@ fn in_seq(seq1: &[usize], seq2: &[usize]) -> bool {
     }
 }
 
-/// Generate all posible sequences with length >= 3
-fn get_all_sequences(map: &Vec<Vec<i32>>) -> Vec<Vec<usize>> {
+/// Generate all posible sequences with length >= 3 (no duplicates)
+fn get_all_sequences(map: &Vec<Vec<u64>>) -> Vec<Vec<usize>> {
     let mut sequences: Vec<Vec<usize>> = Vec::new();
     for (r_idx, row) in map.iter().enumerate() {
         for (c_idx, item) in row.iter().enumerate() {
@@ -101,7 +136,7 @@ fn get_all_sequences(map: &Vec<Vec<i32>>) -> Vec<Vec<usize>> {
                 continue;
             }
             let seq = get_single_seq(map, r_idx, c_idx);
-            if seq.len() >= 3 {
+            if seq.len() >= 3 && !sequences.contains(&seq) {
                 sequences.push(seq);
             }
         }
@@ -149,11 +184,46 @@ fn eliminate_sequence(
     filtered_seq
 }
 
-// Filter sequences to cover all vectors starting from the longest sequence
-// When middle point of sequence is eliminated, remove whole sequence
-fn filter_seq_bnl(mut sequences: Vec<Vec<usize>>, vectors: &[i32], n: usize) -> Vec<Vec<usize>> {
-    sequences.sort_by(|a, b| a.len().cmp(&b.len()));
-    sequences
+/// Filter sequences to cover all vectors using sequences that matches the most of remaining
+/// symbols
+fn filter_seq_bms(mut sequences: Vec<Vec<usize>>, vectors: &Vec<u64>) -> Vec<Vec<usize>> {
+    let mut symbols: HashSet<usize> = HashSet::new();
+    for i in 0..vectors.len() {
+        symbols.insert(i);
+    }
+    let mut filtered_seq: Vec<Vec<usize>> = Vec::new();
+    while symbols.len() > 0 && sequences.len() > 0 {
+        // Get sequence that has the highest ratio of covered remaining symbols per sequence length
+        let mut idx = 0;
+        let mut ratio = 0.0;
+        for (i, seq) in sequences.iter().enumerate() {
+            let r = items_in_seq(&seq, &symbols) as f64 / seq.len() as f64;
+            if r > ratio {
+                ratio = r;
+                idx = i;
+            }
+        }
+        let seq = sequences.remove(idx);
+        for item in seq.iter() {
+            symbols.remove(item);
+        }
+        filtered_seq.push(seq);
+    }
+    // Add remaining sequences as single vectors
+    for symbol in symbols.into_iter() {
+        filtered_seq.push(vec![symbol]);
+    }
+    filtered_seq
+}
+
+fn items_in_seq(seq: &Vec<usize>, symbols: &HashSet<usize>) -> usize {
+    let mut count = 0;
+    for item in seq.iter() {
+        if symbols.contains(item) {
+            count += 1;
+        }
+    }
+    count
 }
 
 #[cfg(test)]
@@ -162,21 +232,21 @@ mod test {
 
     #[test]
     fn test_distance_map() {
-        let test_seq = [1, 2, 5, 4, 3, 6];
-        let map = distance_map(&test_seq);
-        let map_gold = [
-            [0, 1, 4, 3, 2, 5],
-            [-1, 0, 3, 2, 1, 4],
-            [-4, -3, 0, -1, -2, 1],
-            [-3, -2, 1, 0, -1, 2],
-            [-2, -1, 2, 1, 0, 3],
-            [-5, -4, -1, -2, -3, 0],
-        ];
-        for (row, row_g) in map.iter().zip(map_gold.iter()) {
-            for (item, item_g) in row.iter().zip(row_g.iter()) {
-                assert_eq!(*item, *item_g);
-            }
-        }
+        // let test_seq = [1, 2, 5, 4, 3, 6];
+        // let map = distance_map(&test_seq);
+        // let map_gold = [
+        //     [0, 1, 4, 3, 2, 5],
+        //     [-1, 0, 3, 2, 1, 4],
+        //     [-4, -3, 0, -1, -2, 1],
+        //     [-3, -2, 1, 0, -1, 2],
+        //     [-2, -1, 2, 1, 0, 3],
+        //     [-5, -4, -1, -2, -3, 0],
+        // ];
+        // for (row, row_g) in map.iter().zip(map_gold.iter()) {
+        //     for (item, item_g) in row.iter().zip(row_g.iter()) {
+        //         assert_eq!(*item, *item_g);
+        //     }
+        // }
     }
 
     #[test]

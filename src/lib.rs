@@ -1,74 +1,7 @@
-use std::{
-    collections::HashSet,
-    env,
-    io::{Read, Write},
-};
-
-fn main() {
-    // Load vectors from given file
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        println!("Invalid number of arguments.\nUsage: aseq <path_to_vectors_file>");
-        return;
-    }
-
-    let file = std::fs::File::open(&args[1]);
-    // let file = std::fs::File::open("test.txt");
-    let mut content = String::new();
-    let _ = match file {
-        Ok(mut f) => f.read_to_string(&mut content),
-        Err(e) => {
-            println!("Error opening file: {}", e);
-            return;
-        }
-    };
-
-    let mut vectors: Vec<u64> = Vec::new();
-    for line in content.lines() {
-        let v: u64 = line
-            .parse()
-            .expect(&format!("Couldn't parse line: {} to u64", line));
-        if vectors.contains(&v) {
-            println!("Vectors must be unique. Duplicate item: {}", v);
-            return;
-        }
-        vectors.push(v);
-    }
-
-    // create distance map
-    let map = distance_map(&vectors);
-
-    let mut csv = String::new();
-    for row in map.iter() {
-        for item in row.iter() {
-            csv.push_str(&format!("{},", item));
-        }
-        csv.push('\n');
-    }
-    let mut csv_file = std::fs::File::create("distances.csv").unwrap();
-    let _ = csv_file.write_all(&csv.as_bytes());
-    println!("Distance map saved to distances.csv file.");
-
-    // create sequences
-    let res = get_all_sequences(&map);
-    println!("Sequences");
-    println!("{:?}", res);
-    println!("Sequences de-mapped");
-    for seq in res.iter() {
-        for idx in seq[0..seq.len() - 1].iter() {
-            print!("{} -> ", vectors[*idx]);
-        }
-        println!("{}", vectors[seq[seq.len() - 1]]);
-    }
-
-    // Create pattern set
-    let patterns = filter_seq_hybrid(res, &vectors, 0.5);
-    // let patterns = filter_seq_greedy(res, &vectors);
-    println!("Filtered patterns: {:?}", patterns);
-}
+use std::collections::HashSet;
 
 /// Creates distance map
-fn distance_map(vectors: &[u64]) -> Vec<Vec<u64>> {
+pub fn distance_map(vectors: &[u64]) -> Vec<Vec<u64>> {
     let mut map: Vec<Vec<u64>> = Vec::with_capacity(vectors.len());
     for item in vectors.iter() {
         let mut row: Vec<u64> = Vec::with_capacity(vectors.len());
@@ -83,7 +16,7 @@ fn distance_map(vectors: &[u64]) -> Vec<Vec<u64>> {
 }
 
 /// Create arithmetic sequence based on given element (row) and next element (col)
-fn get_single_seq(map: &Vec<Vec<u64>>, row: usize, col: usize) -> Vec<usize> {
+pub fn get_single_seq(map: &Vec<Vec<u64>>, row: usize, col: usize) -> Vec<usize> {
     // vector of number ids that forms arithmetic sequence
     let mut path: Vec<usize> = vec![row];
     let increment = map[row][col];
@@ -100,7 +33,7 @@ fn get_single_seq(map: &Vec<Vec<u64>>, row: usize, col: usize) -> Vec<usize> {
 }
 
 /// Check if seq2 is part of seq1
-fn in_seq(seq1: &[usize], seq2: &[usize]) -> bool {
+pub fn in_seq(seq1: &[usize], seq2: &[usize]) -> bool {
     if seq2.len() > seq1.len() {
         return false;
     }
@@ -125,7 +58,7 @@ fn in_seq(seq1: &[usize], seq2: &[usize]) -> bool {
 }
 
 /// Generate all posible sequences with length >= 3 (no duplicates)
-fn get_all_sequences(map: &Vec<Vec<u64>>) -> Vec<Vec<usize>> {
+pub fn get_all_sequences(map: &Vec<Vec<u64>>) -> Vec<Vec<usize>> {
     let mut sequences: Vec<Vec<usize>> = Vec::new();
     for (r_idx, row) in map.iter().enumerate() {
         for (c_idx, item) in row.iter().enumerate() {
@@ -145,7 +78,7 @@ fn get_all_sequences(map: &Vec<Vec<u64>>) -> Vec<Vec<usize>> {
 /// Remove all items present in 'seq' from other sequences passed as 'sequences'
 /// If 'divide' is false, and item was found inside a sequence, it will be discarded
 /// otherwise it will be split in half and only item will be removed
-fn eliminate_sequence(
+pub fn eliminate_sequence(
     mut sequences: Vec<Vec<usize>>,
     seq: &Vec<usize>,
     divide: bool,
@@ -183,7 +116,7 @@ fn eliminate_sequence(
 }
 
 /// Filter sequences to cover all vectors using longest sequences
-fn filter_seq_greedy(mut sequences: Vec<Vec<usize>>, vectors: &Vec<u64>) -> Vec<Vec<usize>> {
+pub fn filter_seq_greedy(mut sequences: Vec<Vec<usize>>, vectors: &Vec<u64>) -> Vec<Vec<usize>> {
     let mut symbols: HashSet<usize> = HashSet::new();
     for i in 0..vectors.len() {
         symbols.insert(i);
@@ -210,7 +143,7 @@ fn filter_seq_greedy(mut sequences: Vec<Vec<usize>>, vectors: &Vec<u64>) -> Vec<
 /// Filter sequences to cover all vectors using sequences that matches the most of remaining
 /// symbols. Each step sequences with ratio of covered symbols to sequence lenght below cutoff
 /// will be discarded
-fn filter_seq_hybrid(
+pub fn filter_seq_hybrid(
     mut sequences: Vec<Vec<usize>>,
     vectors: &Vec<u64>,
     cutoff: f64,
@@ -248,7 +181,7 @@ fn filter_seq_hybrid(
     filtered_seq
 }
 
-fn items_in_seq(seq: &Vec<usize>, symbols: &HashSet<usize>) -> usize {
+pub fn items_in_seq(seq: &Vec<usize>, symbols: &HashSet<usize>) -> usize {
     let mut count = 0;
     for item in seq.iter() {
         if symbols.contains(item) {

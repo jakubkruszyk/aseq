@@ -13,6 +13,7 @@ fn main() {
     }
 
     let file = std::fs::File::open(&args[1]);
+    // let file = std::fs::File::open("test.txt");
     let mut content = String::new();
     let _ = match file {
         Ok(mut f) => f.read_to_string(&mut content),
@@ -42,7 +43,7 @@ fn main() {
         for item in row.iter() {
             csv.push_str(&format!("{},", item));
         }
-        csv.push_str("\n");
+        csv.push('\n');
     }
     let mut csv_file = std::fs::File::create("distances.csv").unwrap();
     let _ = csv_file.write_all(&csv.as_bytes());
@@ -61,7 +62,8 @@ fn main() {
     }
 
     // Create pattern set
-    let patterns = filter_seq_bms(res, &vectors);
+    let patterns = filter_seq_hybrid(res, &vectors, 0.5);
+    // let patterns = filter_seq_greedy(res, &vectors);
     println!("Filtered patterns: {:?}", patterns);
 }
 
@@ -72,11 +74,7 @@ fn distance_map(vectors: &[u64]) -> Vec<Vec<u64>> {
         let mut row: Vec<u64> = Vec::with_capacity(vectors.len());
         for next_item in vectors.iter() {
             let diff = *next_item as i128 - *item as i128;
-            let udiff = if diff < 0 {
-                (!diff + 1) as u64
-            } else {
-                diff as u64
-            };
+            let udiff = diff as u64;
             row.push(udiff);
         }
         map.push(row);
@@ -184,26 +182,60 @@ fn eliminate_sequence(
     filtered_seq
 }
 
+/// Filter sequences to cover all vectors using longest sequences
+fn filter_seq_greedy(mut sequences: Vec<Vec<usize>>, vectors: &Vec<u64>) -> Vec<Vec<usize>> {
+    let mut symbols: HashSet<usize> = HashSet::new();
+    for i in 0..vectors.len() {
+        symbols.insert(i);
+    }
+    let mut filtered_seq: Vec<Vec<usize>> = Vec::new();
+    while !symbols.is_empty() && !sequences.is_empty() {
+        sequences.sort_by(|a, b| items_in_seq(&a, &symbols).cmp(&items_in_seq(&b, &symbols)));
+        let seq = sequences.pop().unwrap();
+        if items_in_seq(&seq, &symbols) == 1 {
+            break;
+        }
+        for item in seq.iter() {
+            symbols.remove(item);
+        }
+        filtered_seq.push(seq);
+    }
+    // Add remaining sequences as single vectors
+    for symbol in symbols.into_iter() {
+        filtered_seq.push(vec![symbol]);
+    }
+    filtered_seq
+}
+
 /// Filter sequences to cover all vectors using sequences that matches the most of remaining
-/// symbols
-fn filter_seq_bms(mut sequences: Vec<Vec<usize>>, vectors: &Vec<u64>) -> Vec<Vec<usize>> {
+/// symbols. Each step sequences with ratio of covered symbols to sequence lenght below cutoff
+/// will be discarded
+fn filter_seq_hybrid(
+    mut sequences: Vec<Vec<usize>>,
+    vectors: &Vec<u64>,
+    cutoff: f64,
+) -> Vec<Vec<usize>> {
+    if cutoff > 1.0 {
+        println!("[Warning] cutoff value is greater than 1.0. All sequences will be discarded");
+    }
     let mut symbols: HashSet<usize> = HashSet::new();
     for i in 0..vectors.len() {
         symbols.insert(i);
     }
     let mut filtered_seq: Vec<Vec<usize>> = Vec::new();
     while symbols.len() > 0 && sequences.len() > 0 {
-        // Get sequence that has the highest ratio of covered remaining symbols per sequence length
-        let mut idx = 0;
-        let mut ratio = 0.0;
-        for (i, seq) in sequences.iter().enumerate() {
-            let r = items_in_seq(&seq, &symbols) as f64 / seq.len() as f64;
-            if r > ratio {
-                ratio = r;
-                idx = i;
-            }
+        sequences = sequences
+            .into_iter()
+            .filter(|s| (items_in_seq(&s, &symbols) as f64 / s.len() as f64) >= cutoff)
+            .collect();
+        if sequences.is_empty() {
+            break;
         }
-        let seq = sequences.remove(idx);
+        sequences.sort_by(|a, b| items_in_seq(&a, &symbols).cmp(&items_in_seq(&b, &symbols)));
+        let seq = sequences.pop().unwrap();
+        if items_in_seq(&seq, &symbols) == 1 {
+            break;
+        }
         for item in seq.iter() {
             symbols.remove(item);
         }
